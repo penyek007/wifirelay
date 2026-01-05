@@ -68,7 +68,7 @@ body {
 
 h2 { margin-top: 0; }
 
-.password-input {
+.input {
   width: 100%;
   height: 56px;
   font-size: 18px;
@@ -114,19 +114,28 @@ button.main {
   <!-- LOGIN -->
   <div class="card" id="login">
     <h2>Вход</h2>
+
+    <input
+      id="host"
+      class="input"
+      placeholder="IP:PORT (например 192.168.1.10:1000)"
+    >
+
     <input
       id="password"
-      class="password-input"
+      class="input"
       type="password"
       placeholder="Пароль"
-      onkeydown="if(event.key==='Enter') login()"
+      onkeydown="if(event.key==='Enter') loginUser()"
     >
-    <button class="main" onclick="login()">Войти</button>
+
+    <button class="main" onclick="loginUser()">Войти</button>
   </div>
 
   <!-- MAIN -->
   <div class="card" id="main" style="display:none;">
     <h2>WiFi контроллер</h2>
+
     <button class="main" onclick="cmd('/r1')">Ворота</button>
     <button class="main" onclick="cmd('/r2')">Калитка</button>
     <button class="main" onclick="cmd('/r3')">Гараж</button>
@@ -134,8 +143,8 @@ button.main {
     <button class="main" onclick="togglePwd()">Сменить пароль</button>
 
     <div id="pwd" style="display:none;">
-      <input class="password-input" id="oldp" type="password" placeholder="Старый пароль">
-      <input class="password-input" id="newp" type="password" placeholder="Новый пароль">
+      <input class="input" id="oldp" type="password" placeholder="Старый пароль">
+      <input class="input" id="newp" type="password" placeholder="Новый пароль">
       <button class="main" onclick="changePwd()">Сохранить</button>
     </div>
   </div>
@@ -146,13 +155,17 @@ button.main {
 <div id="overlay">
   <div class="card">
     <h3>Ошибка</h3>
-    <p>Сервер временно недоступен</p>
+    <p>Сервер недоступен</p>
     <button class="main" onclick="overlay.style.display='none'">OK</button>
   </div>
 </div>
 
 <script>
-const BASE = "http://217.169.91.213:1000";
+/* ===== HOST ===== */
+let BASE = "";
+
+const hostInput = document.getElementById("host");
+hostInput.value = localStorage.getItem("host") || "";
 
 /* ===== HASH ===== */
 async function sha256(text) {
@@ -176,9 +189,14 @@ async function api(url, options = {}) {
 }
 
 /* ===== LOGIN ===== */
-async function login() {
+async function loginUser() {
   const pass = password.value;
-  if (!pass) return;
+  const host = hostInput.value.trim();
+
+  if (!pass || !host) return;
+
+  BASE = host.startsWith("http") ? host : "http://" + host;
+  localStorage.setItem("host", BASE);
 
   const hash = await sha256(pass);
 
