@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>WiFi контроллер</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#6ec6ff">
+<link rel="apple-touch-icon" href="/icon-192.png">
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  min-height: 100svh;
+  background: linear-gradient(180deg, #6ec6ff, #b3e5fc);
+  overflow-x: hidden;
+}
+
+.wrapper {
+  min-height: 100svh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 60px;
+}
+
+.wave {
+  position: fixed;
+  width: 200%;
+  height: 200px;
+  left: 0;
+  background: rgba(255,255,255,0.15);
+  border-radius: 100%;
+  animation: wave 12s infinite linear;
+  z-index: 0;
+}
+
+.wave1 { top: 60%; }
+.wave2 { top: 70%; opacity: 0.1; animation-duration: 20s; }
+
+@keyframes wave {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.card {
+  position: relative;
+  z-index: 10;
+  width: calc(100% - 32px);
+  max-width: 360px;
+  background: white;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+  text-align: center;
+}
+
+h2 { margin-top: 0; }
+
+.password-input {
+  width: 100%;
+  height: 52px;
+  font-size: 16px;
+  margin-bottom: 10px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid #ccc;
+  text-align: center;
+}
+
+button.main {
+  width: 100%;
+  height: 56px;
+  font-size: 18px;
+  margin-top: 10px;
+  border: none;
+  border-radius: 12px;
+  background: #2196f3;
+  color: white;
+  cursor: pointer;
+}
+</style>
+</head>
+
+<body>
+
+<div class="wave wave1"></div>
+<div class="wave wave2"></div>
+
+<div class="wrapper">
+
+<!-- LOGIN -->
+<div class="card" id="login">
+  <h2>Вход</h2>
+  <input id="pass" class="password-input" type="password" placeholder="Пароль">
+  <button class="main" onclick="login()">Войти</button>
+</div>
+
+<!-- MAIN -->
+<div class="card" id="main" style="display:none;">
+  <h2>WiFi контроллер</h2>
+
+  <button class="main" onclick="cmd('/r1')">Ворота</button>
+  <button class="main" onclick="cmd('/r2')">Калитка</button>
+  <button class="main" onclick="cmd('/r3')">Гараж</button>
+
+  <button class="main" onclick="togglePwd()">Сменить пароль</button>
+
+  <div id="pwd" style="display:none;">
+    <input class="password-input" id="old" placeholder="Старый пароль" type="password">
+    <input class="password-input" id="new" placeholder="Новый пароль" type="password">
+    <button class="main" onclick="changePwd()">Сохранить</button>
+  </div>
+</div>
+
+</div>
+
+<script>
+async function sha256(t){
+  const b=new TextEncoder().encode(t);
+  const h=await crypto.subtle.digest("SHA-256",b);
+  return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+
+async function login(){
+  const h=await sha256(pass.value);
+  const r=await fetch("/login",{method:"POST",body:h});
+  if(r.ok){login.style.display="none";main.style.display="block";}
+  else alert("Неверный пароль");
+}
+
+function cmd(u){fetch(u);}
+
+function togglePwd(){
+  pwd.style.display = pwd.style.display==="none"?"block":"none";
+}
+
+async function changePwd(){
+  const o=await sha256(old.value);
+  const n=await sha256(new.value);
+  const r=await fetch("/passwd",{method:"POST",body:o+":"+n});
+  alert(r.ok?"Пароль изменён":"Ошибка");
+}
+
+/* автологин */
+fetch("/auth").then(r=>{
+  if(r.ok){login.style.display="none";main.style.display="block";}
+});
+
+/* PWA */
+if("serviceWorker"in navigator){
+  navigator.serviceWorker.register("/sw.js");
+}
+</script>
+
+</body>
+</html>
