@@ -2,12 +2,18 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>WiFi контроллер</title>
 
 <!-- PWA -->
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#6ec6ff">
+<link rel="apple-touch-icon" href="/icon-192.png">
 
 <style>
 * { box-sizing: border-box; }
@@ -17,6 +23,7 @@ body {
   font-family: Arial, sans-serif;
   min-height: 100svh;
   background: linear-gradient(180deg, #6ec6ff, #b3e5fc);
+  overflow-x: hidden;
 }
 
 .wrapper {
@@ -25,12 +32,34 @@ body {
   justify-content: center;
   align-items: flex-start;
   padding-top: 60px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.wave {
+  position: fixed;
+  width: 200%;
+  height: 200px;
+  left: 0;
+  background: rgba(255,255,255,0.15);
+  border-radius: 100%;
+  animation: wave 12s infinite linear;
+  z-index: 0;
+}
+
+.wave1 { top: 60%; }
+.wave2 { top: 70%; opacity: 0.1; animation-duration: 20s; }
+
+@keyframes wave {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
 }
 
 .card {
+  position: relative;
+  z-index: 10;
   width: calc(100% - 32px);
   max-width: 360px;
-  background: #fff;
+  background: white;
   border-radius: 16px;
   padding: 20px;
   box-shadow: 0 8px 20px rgba(0,0,0,0.15);
@@ -39,17 +68,18 @@ body {
 
 h2 { margin-top: 0; }
 
-input {
+.password-input {
   width: 100%;
-  height: 52px;
-  font-size: 16px;
-  margin-bottom: 10px;
+  height: 56px;
+  font-size: 18px;
+  margin-bottom: 12px;
+  padding: 0 14px;
   border-radius: 10px;
   border: 1px solid #ccc;
   text-align: center;
 }
 
-button {
+button.main {
   width: 100%;
   height: 56px;
   font-size: 18px;
@@ -61,111 +91,137 @@ button {
   cursor: pointer;
 }
 
+/* overlay */
 #overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.4);
+  background: rgba(0,0,0,0.4);
   display: none;
   align-items: center;
   justify-content: center;
-}
-
-#overlay .card {
-  max-width: 300px;
+  z-index: 100;
 }
 </style>
 </head>
 
 <body>
 
+<div class="wave wave1"></div>
+<div class="wave wave2"></div>
+
 <div class="wrapper">
+
   <!-- LOGIN -->
   <div class="card" id="login">
     <h2>Вход</h2>
-    <input id="password" type="password" placeholder="Пароль">
-    <button onclick="login()">Войти</button>
+    <input
+      id="password"
+      class="password-input"
+      type="password"
+      placeholder="Пароль"
+      onkeydown="if(event.key==='Enter') login()"
+    >
+    <button class="main" onclick="login()">Войти</button>
   </div>
 
   <!-- MAIN -->
   <div class="card" id="main" style="display:none;">
     <h2>WiFi контроллер</h2>
-    <button onclick="cmd('/r1')">Ворота</button>
-    <button onclick="cmd('/r2')">Калитка</button>
-    <button onclick="cmd('/r3')">Гараж</button>
+    <button class="main" onclick="cmd('/r1')">Ворота</button>
+    <button class="main" onclick="cmd('/r2')">Калитка</button>
+    <button class="main" onclick="cmd('/r3')">Гараж</button>
 
-    <button onclick="togglePwd()">Сменить пароль</button>
+    <button class="main" onclick="togglePwd()">Сменить пароль</button>
 
     <div id="pwd" style="display:none;">
-      <input id="oldp" type="password" placeholder="Старый пароль">
-      <input id="newp" type="password" placeholder="Новый пароль">
-      <button onclick="changePwd()">Сохранить</button>
+      <input class="password-input" id="oldp" type="password" placeholder="Старый пароль">
+      <input class="password-input" id="newp" type="password" placeholder="Новый пароль">
+      <button class="main" onclick="changePwd()">Сохранить</button>
     </div>
   </div>
+
 </div>
 
-<!-- OVERLAY -->
+<!-- ERROR OVERLAY -->
 <div id="overlay">
   <div class="card">
     <h3>Ошибка</h3>
     <p>Сервер временно недоступен</p>
-    <button onclick="hideErr()">OK</button>
+    <button class="main" onclick="overlay.style.display='none'">OK</button>
   </div>
 </div>
 
 <script>
 const BASE = "http://217.169.91.213:1000";
 
-function showErr(){ overlay.style.display="flex"; }
-function hideErr(){ overlay.style.display="none"; }
-
-async function sha256(t){
-  const b=new TextEncoder().encode(t);
-  const h=await crypto.subtle.digest("SHA-256",b);
-  return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,"0")).join("");
+/* ===== HASH ===== */
+async function sha256(text) {
+  const buf = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(hash)]
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-async function api(url, opt={}){
-  try{
-    const r = await fetch(BASE+url, opt);
-    if(!r.ok) throw 0;
+/* ===== API ===== */
+async function api(url, options = {}) {
+  try {
+    const r = await fetch(BASE + url, options);
+    if (!r.ok) throw new Error();
     return r;
-  }catch{
-    showErr();
-    throw 0;
+  } catch {
+    overlay.style.display = "flex";
+    throw new Error();
   }
 }
 
-async function login(){
-  const h = await sha256(password.value);
-  await api("/login",{method:"POST",body:h});
-  loginDiv(false);
+/* ===== LOGIN ===== */
+async function login() {
+  const pass = password.value;
+  if (!pass) return;
+
+  const hash = await sha256(pass);
+
+  try {
+    await api("/login", {
+      method: "POST",
+      body: hash
+    });
+
+    login.style.display = "none";
+    main.style.display = "block";
+    password.value = "";
+
+  } catch {}
 }
 
-function loginDiv(ok){
-  login.style.display = ok?"none":"block";
-  main.style.display  = ok?"block":"none";
+/* ===== COMMAND ===== */
+async function cmd(path) {
+  try { await api(path); } catch {}
 }
 
-async function cmd(u){
-  await api(u);
+/* ===== PASSWORD CHANGE ===== */
+function togglePwd() {
+  pwd.style.display = pwd.style.display === "none" ? "block" : "none";
 }
 
-function togglePwd(){
-  pwd.style.display = pwd.style.display==="none"?"block":"none";
+async function changePwd() {
+  const oldh = await sha256(oldp.value);
+  const newh = await sha256(newp.value);
+
+  try {
+    await api("/passwd", {
+      method: "POST",
+      body: oldh + ":" + newh
+    });
+    alert("Пароль изменён");
+    pwd.style.display = "none";
+    oldp.value = newp.value = "";
+  } catch {}
 }
 
-async function changePwd(){
-  const o = await sha256(oldp.value);
-  const n = await sha256(newp.value);
-  await api("/passwd",{method:"POST",body:o+":"+n});
-  alert("Пароль изменён");
-}
-
-/* автологин */
-api("/auth").then(()=>loginDiv(true)).catch(()=>{});
-
-/* PWA */
-if("serviceWorker" in navigator){
+/* ===== PWA ===== */
+if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js");
 }
 </script>
