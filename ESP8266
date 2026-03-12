@@ -1,0 +1,377 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <EEPROM.h>
+
+// ===== WiFi =====
+const char* ssid = "sashimi Wi-Fi";
+const char* wifi_password = "89260713447";
+
+// ===== ПАРОЛЬ =====
+const char* PASSWORD = "9495";
+
+// ===== РЕЛЕ =====
+#define RELAY_GATE   14   // ВОРОТА
+#define RELAY_WICKET 12   // КАЛИТКА
+#define RELAY_GARAGE 13   // ГАРАЖ
+
+#define LED LED_BUILTIN
+
+ESP8266WebServer server(80);
+
+// ===== Cookie headers =====
+const char* headerKeys[] = { "Cookie" };
+const size_t headerKeysCount = 1;
+
+// ===== session token =====
+String sessionToken = "";
+
+// ===== EEPROM =====
+#define EEPROM_SIZE 64
+#define TOKEN_ADDR  0
+
+// ===== WiFi TIMER =====
+unsigned long wifiTimer = 0;
+const unsigned long WIFI_CHECK_INTERVAL = 10000;
+
+// ===== импульс =====
+void pulseRelay(uint8_t pin) {
+  digitalWrite(pin, HIGH);
+  delay(500);
+  digitalWrite(pin, LOW);
+}
+
+// ===== генерация токена =====
+String generateToken() {
+  const char chars[] =
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789";
+  String t = "";
+  for (int i = 0; i < 16; i++) {
+    t += chars[random(sizeof(chars) - 1)];
+  }
+  return t;
+}
+
+// ===== EEPROM helpers =====
+void saveTokenToEEPROM(const String& token) {
+  for (int i = 0; i < EEPROM_SIZE; i++) EEPROM.write(TOKEN_ADDR + i, 0);
+  for (int i = 0; i < token.length() && i < EEPROM_SIZE - 1; i++) {
+    EEPROM.write(TOKEN_ADDR + i, token[i]);
+  }
+  EEPROM.commit();
+}
+
+String loadTokenFromEEPROM() {
+  char buf[EEPROM_SIZE];
+  for (int i = 0; i < EEPROM_SIZE; i++) {
+    buf[i] = EEPROM.read(TOKEN_ADDR + i);
+  }
+  return String(buf);
+}
+
+// ===== проверка cookie =====
+bool hasValidCookie() {
+  if (!server.hasHeader("Cookie")) return false;
+  String cookie = server.header("Cookie");
+  return cookie.indexOf("auth=" + sessionToken) >= 0;
+}
+
+// ===== HTML =====
+const char INDEX_HTML[] PROGMEM = R"====(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+
+<meta name="viewport"
+content="width=device-width,
+initial-scale=1,
+maximum-scale=1,
+user-scalable=no">
+
+<title>Remote Control</title>
+
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1e3c72">
+
+<style>
+html, body {
+  margin:0;
+  padding:0;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  overscroll-behavior:none;
+  touch-action:none;
+  font-family:Arial;
+  background:linear-gradient(180deg,#dce3ea,#b7cff2);
+}
+
+* {
+  user-select:none;
+  -webkit-user-select:none;
+  -webkit-touch-callout:none;
+}
+
+.wave {
+  position:fixed;
+  width:200%;
+  height:220px;
+  bottom:0;
+  background:rgba(255,255,255,0.35);
+  border-radius:100%;
+  animation:wave 14s linear infinite;
+}
+
+.wave2 {
+  animation-duration:20s;
+  opacity:.4;
+}
+
+@keyframes wave {
+  from { transform:translateX(0); }
+  to { transform:translateX(-50%); }
+}
+
+.panel {
+  position:fixed;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
+  width:100%;
+  max-width:360px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  z-index:10;
+}
+
+.auth {
+  width:300px;
+  display:flex;
+  margin-bottom:14px;
+  border:3px solid #1e3c72;
+  border-radius:14px;
+  background:#1e3c72;
+}
+
+.auth input {
+  flex:1;
+  padding:12px;
+  border:none;
+  border-radius:10px 0 0 10px;
+  font-size:16px;
+}
+
+.auth-btn {
+  width:70px;
+  border:none;
+  border-radius:0 10px 10px 0;
+  background:#f0f0f0;
+  font-size:16px;
+}
+
+.auth input:focus,
+.auth-btn:focus {
+  outline:none;
+}
+
+.main-btn {
+  width:300px;
+  height:70px;
+  margin:12px 0;
+  font-size:20px;
+  background:#1e3c72;
+  color:white;
+  border:none;
+  border-radius:18px;
+}
+
+.main-btn:disabled {
+  opacity:0.6;
+}
+</style>
+</head>
+
+<body>
+
+<div class="wave"></div>
+<div class="wave wave2"></div>
+
+<div class="panel">
+
+  <div class="auth">
+    <input type="password" id="pwd" placeholder="Пароль">
+    <button class="auth-btn" id="ok" onclick="auth()">OK</button>
+  </div>
+
+  <button class="main-btn" disabled onclick="send(1,this)">Ворота</button>
+  <button class="main-btn" disabled onclick="send(2,this)">Калитка</button>
+  <button class="main-btn" disabled onclick="send(3,this)">Гараж</button>
+
+</div>
+
+<script>
+let buttons = document.querySelectorAll(".main-btn");
+
+function setButtons(s){
+  buttons.forEach(b => b.disabled = !s);
+}
+
+function auth(){
+  let p = document.getElementById("pwd").value;
+
+  fetch("/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "p=" + encodeURIComponent(p)
+  })
+  .then(r => r.text())
+  .then(t => {
+    let b = document.getElementById("ok");
+    if (t === "OK") {
+      b.style.background = "green";
+      b.style.color = "white";
+      setButtons(true);
+    } else {
+      b.style.background = "red";
+      b.style.color = "white";
+      setButtons(false);
+    }
+  });
+}
+
+document.getElementById("pwd").addEventListener("keydown", e => {
+  if (e.key === "Enter") auth();
+});
+
+function send(n, btn){
+  btn.disabled = true;
+  fetch("/relay", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "num=" + n
+  })
+  .finally(() => setTimeout(() => btn.disabled = false, 2000));
+}
+
+fetch("/auth").then(r => {
+  if (r.status === 200) setButtons(true);
+});
+</script>
+
+</body>
+</html>
+)====";
+
+// ===== MANIFEST =====
+const char MANIFEST_JSON[] PROGMEM = R"====(
+{
+  "name": "Remote Control",
+  "short_name": "Remote",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#1e3c72",
+  "background_color": "#1e3c72"
+}
+)====";
+
+// ===== FAVICON =====
+const char FAVICON_SVG[] PROGMEM = R"====(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <path fill="#d32f2f" d="M32 6L4 30h6v28h18V42h8v16h18V30h6z"/>
+  <rect x="28" y="42" width="8" height="16" fill="#8b0000"/>
+</svg>
+)====";
+
+// ===== handlers =====
+void handleRoot() {
+  server.send_P(200, "text/html", INDEX_HTML);
+}
+
+void handleManifest() {
+  server.send_P(200, "application/json", MANIFEST_JSON);
+}
+
+void handleFavicon() {
+  server.send_P(200, "image/svg+xml", FAVICON_SVG);
+}
+
+void handleCheck() {
+  if (server.hasArg("p") && server.arg("p") == PASSWORD) {
+    sessionToken = generateToken();
+    saveTokenToEEPROM(sessionToken);
+    server.sendHeader(
+      "Set-Cookie",
+      "auth=" + sessionToken + "; Max-Age=31536000; Path=/"
+    );
+    server.send(200,"text/plain","OK");
+  } else {
+    server.send(403,"text/plain","NO");
+  }
+}
+
+void handleAuth() {
+  if (hasValidCookie())
+    server.send(200,"text/plain","OK");
+  else
+    server.send(403,"text/plain","NO");
+}
+
+void handleRelay() {
+  if (!hasValidCookie()) {
+    server.send(403,"text/plain","DENIED");
+    return;
+  }
+
+  int n = server.arg("num").toInt();
+  if (n == 1) pulseRelay(RELAY_GATE);
+  if (n == 2) pulseRelay(RELAY_WICKET);
+  if (n == 3) pulseRelay(RELAY_GARAGE);
+
+  server.send(200,"text/plain","OK");
+}
+
+void setup() {
+  EEPROM.begin(EEPROM_SIZE);
+  sessionToken = loadTokenFromEEPROM();
+
+  pinMode(LED, OUTPUT);
+  digitalWrite(LED, HIGH);
+
+  pinMode(RELAY_GATE, OUTPUT);
+  pinMode(RELAY_WICKET, OUTPUT);
+  pinMode(RELAY_GARAGE, OUTPUT);
+
+  WiFi.begin(ssid, wifi_password);
+  randomSeed(ESP.getCycleCount());
+
+  server.collectHeaders(headerKeys, headerKeysCount);
+
+  server.on("/", handleRoot);
+  server.on("/favicon.ico", handleFavicon);
+  server.on("/check", HTTP_POST, handleCheck);
+  server.on("/relay", HTTP_POST, handleRelay);
+  server.on("/auth", handleAuth);
+  server.on("/manifest.json", handleManifest);
+
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+
+  if (millis() - wifiTimer >= WIFI_CHECK_INTERVAL) {
+    wifiTimer = millis();
+    if (WiFi.status() == WL_CONNECTED) {
+      digitalWrite(LED, LOW);
+    } else {
+      for(int i=0;i<3;i++){
+        digitalWrite(LED, LOW); delay(200);
+        digitalWrite(LED, HIGH); delay(200);
+      }
+    }
+  }
+}
